@@ -107,7 +107,6 @@ main (int argc, char *argv[])
     SIGUSR2,
     SIGPIPE,
     SIGALRM,
-    SIGTERM,
     SIGCHLD,
     SIGTSTP
   };
@@ -143,8 +142,7 @@ main (int argc, char *argv[])
       signal(ign_signal[i], SIG_IGN);
 
   /* Wait for signo */
-  fprintf(stderr, "Waiting for %s... ", signal_names[signo]);
-  fflush(stderr);
+  fprintf(stderr, "Waiting for %s...\n", signal_names[signo]);
 
   while (!signal_caught)
     if (sigsuspend (&oldmask) == -1 && errno != EINTR)
@@ -166,6 +164,7 @@ main (int argc, char *argv[])
       fprintf (stderr, "%s\n", strerror (errno));
       exit (1);
     }
+
   exit (0);
 }
 

@@ -1,8 +1,8 @@
 [Unit]
-Description=Wait For Signal - Inhibit suspend until given signal received.
+Description=Inhibit suspend - Wait until given signal received.
 
 [Service]
-Type=simple
+Type=exec
 Environment=SIGNAL=SIGUSR1
 ExecStart=/usr/bin/systemd-inhibit /usr/bin/wait-for-signal $SIGNAL
 ExecStop=/usr/bin/kill -s $SIGNAL $MAINPID
