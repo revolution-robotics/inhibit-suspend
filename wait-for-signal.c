@@ -23,7 +23,7 @@ typedef void (*sighandler_t)(int);
 
 static bool valid_int (char *, int *);
 static int decode_signal (char *);
-static sighandler_t handle_signal (int);
+static void handle_signal (int);
 
 char *signal_names[] = {
     "EXIT",
@@ -58,6 +58,8 @@ char *signal_names[] = {
     "SIGIO",
     "SIGPWR",
     "SIGSYS",
+    NULL,
+    NULL,
     "SIGRTMIN",
     "SIGRTMIN+1",
     "SIGRTMIN+2",
@@ -109,11 +111,15 @@ main (int argc, char *argv[])
     SIGCHLD,
     SIGTSTP
   };
+  char *pgm = strchr (argv[0], '/') ? strrchr (argv[0], '/') + 1 : argv[0];
   int ign_signals = sizeof ign_signal / sizeof ign_signal[0];
   int signo = SIGUSR1;
 
   if (argc && (signo = decode_signal(argv[1])) == -1)
+    {
+      fprintf (stderr, "Usage: %s [sigspec] \n", pgm);
       exit (1);
+    }
 
   /* Add signo handler */
  if (signal (signo, (sighandler_t) handle_signal) == SIG_ERR)
@@ -163,19 +169,13 @@ main (int argc, char *argv[])
   exit (0);
 }
 
-static sighandler_t
-handle_signal (int signo)
-{
-  signal_caught = 1;
-}
-
 /*
- * Derived from bash source (see: https://git.savannah.gnu.org/cgit/bash.git/tree/trap.c#n231)
+ * decode_signal: Derived from bash function of the same name (see:
+ *     https://git.savannah.gnu.org/cgit/bash.git/tree/trap.c#n231)
  *
- * Turn a string into a signal number, or a number into a signal
- * number. If STRING is "2", "SIGINT", or "INT", then (int)2 is
- * returned. Return -1 if STRING doesn't contain a valid signal
- * descriptor.
+ * Given STRING, return the indicated integer signal number. If STRING is
+ * "2", "SIGINT", or "INT", then 2 is returned. Return -1 if STRING
+ * doesn't contain a valid signal descriptor.
  */
 static int
 decode_signal (char *string)
@@ -184,9 +184,9 @@ decode_signal (char *string)
   char *name;
   char *short_name;
 
-  /* Convert string to signo if possible. */
+  /* Try converting string to signo using strtol. */
   if (valid_int (string, &signo))
-    return (0 < signo && signo <= SIGRTMAX) ? signo : -1;
+    return (0 < signo && signo < NSIG) ? signo : -1;
 
 #if defined (SIGRTMIN) && defined (SIGRTMAX)
   if (strncasecmp (string, "SIGRTMIN+", 9) == 0)
@@ -221,8 +221,9 @@ decode_signal (char *string)
 
   for (signo = 1; signo < NSIG; ++signo)
     {
-      name = signal_names[signo];
-      if (strcasecmp (string, name) == 0)
+      if ((name = signal_names[signo]) == NULL)
+        continue;
+      else if (strcasecmp (string, name) == 0)
         return ((int) signo);
 
       /* A leading `SIG' may be omitted. */
@@ -238,7 +239,7 @@ static bool
 valid_int (char *s, int *ip)
 {
   char *endp = NULL;
-  size_t l = strtol(s, &endp, 10);
+  long l = strtol(s, &endp, 10);
 
   /* Long and/or Integer overflow or underflow */
   if (errno == ERANGE || l < INT_MIN || INT_MAX < l)
@@ -253,4 +254,11 @@ valid_int (char *s, int *ip)
 
   /* Conversion incomplete */
   return false;
+}
+
+static void
+handle_signal (int signo)
+{
+  if (0 < signo && signo < NSIG)
+    signal_caught = 1;
 }

@@ -12,6 +12,7 @@ install: wait-for-signal
 	else										\
 		install -m 0755 wait-for-signal /usr/bin;				\
 		install -m 0644 inhibit-suspend.service /usr/lib/systemd/system;	\
+		systemctl daemon-reload;						\
 	fi
 
 clean:
