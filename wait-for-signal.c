@@ -94,11 +94,12 @@ char *signal_names[] = {
   };
 
 int signal_caught = 0;
+sigset_t signal_mask;
 
 int
 main (int argc, char *argv[])
 {
-  sigset_t mask, oldmask;
+  sigset_t previous_signal_mask;
   int ign_signal[] = {
     SIGHUP,
     SIGINT,
@@ -114,52 +115,64 @@ main (int argc, char *argv[])
   int ign_signals = sizeof ign_signal / sizeof ign_signal[0];
   int signo = SIGUSR1;
 
-  if (argc && (signo = decode_signal(argv[1])) == -1)
-    {
-      fprintf (stderr, "Usage: %s [sigspec] \n", pgm);
-      exit (1);
-    }
-
-  /* Add signo handler */
- if (signal (signo, (sighandler_t) handle_signal) == SIG_ERR)
+  if (sigemptyset (&signal_mask) < 0)
     {
       fprintf (stderr, "%s\n", strerror (errno));
       exit (1);
     }
 
-  /* Block signo */
-  if (sigemptyset (&mask) < 0
-      || sigaddset (&mask, signo) < 0
-      || sigprocmask (SIG_BLOCK, &mask, &oldmask) < 0)
+  /* Populate signal_mask. */
+  if (argc == 1)
+    {
+      if (signal (signo, (sighandler_t) handle_signal) == SIG_ERR
+          || sigaddset (&signal_mask, signo) < 0)
+        {
+          fprintf (stderr, "%s\n", strerror (errno));
+          exit (1);
+        }
+    }
+  else
+    for (int i = 1; i < argc; ++i)
+      if ((signo = decode_signal(argv[i])) == -1)
+        {
+          fprintf (stderr, "Usage: %s [sigspec] \n", pgm);
+          exit (1);
+        }
+      else if (signal (signo, (sighandler_t) handle_signal) == SIG_ERR
+               || sigaddset (&signal_mask, signo) < 0)
+        {
+          fprintf (stderr, "%s\n", strerror (errno));
+          exit (1);
+        }
+
+  /* Block signals in signal_mask. */
+  if (sigprocmask (SIG_BLOCK, &signal_mask, &previous_signal_mask) < 0)
     {
       fprintf (stderr, "%s\n", strerror (errno));
       exit (1);
     }
 
-  /* Ignore other signals */
+  /* Ignore other signals. */
   for (int i = 0; i < ign_signals; ++i)
-    if (ign_signal[i] != signo)
+    if (!sigismember (&signal_mask, ign_signal[i]))
       signal(ign_signal[i], SIG_IGN);
 
-  /* Wait for signo */
-  fprintf(stderr, "Waiting for %s...\n", signal_names[signo]);
-
   while (!signal_caught)
-    if (sigsuspend (&oldmask) == -1 && errno != EINTR)
+    if (sigsuspend (&previous_signal_mask) == -1 && errno != EINTR)
       {
         fprintf (stderr, "%s\n", strerror (errno));
         exit (1);
       }
 
-  /* Restore other signals */
+  /* Restore other signals. */
   for (int i = 0; i < ign_signals; ++i)
-    if (signo != ign_signal[i])
+    if (!sigismember (&signal_mask, ign_signal[i]))
       signal(ign_signal[i], SIG_DFL);
 
   signal_caught = 0;
 
   /* Unblock signo */
-  if (sigprocmask (SIG_UNBLOCK, &mask, NULL) < 0)
+  if (sigprocmask (SIG_UNBLOCK, &signal_mask, NULL) < 0)
     {
       fprintf (stderr, "%s\n", strerror (errno));
       exit (1);
@@ -258,6 +271,6 @@ valid_int (char *s, int *ip)
 static void
 handle_signal (int signo)
 {
-  if (0 < signo && signo < NSIG)
+  if (sigismember (&signal_mask, signo))
     signal_caught = 1;
 }
