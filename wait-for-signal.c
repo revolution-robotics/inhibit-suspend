@@ -1,8 +1,9 @@
-/* wait-for-signal.c: Sleep until given signal, otherwise SIGUSR1.
+/* wait-for-signal.c: Sleep until one of given signals received,
+ *                    otherwise SIGUSR1.
  *
- *  Copyright © 2023 Revolution Robotics, Inc.
+ * Copyright © 2023 Revolution Robotics, Inc.
  *
- *  This file is part of inhibit-suspend.
+ * This file is part of inhibit-suspend.
  */
 #include <errno.h>
 #include <signal.h>
@@ -21,9 +22,10 @@
 
 typedef void (*sighandler_t)(int);
 
-static bool valid_int (char *, int *);
+static bool validate_int (char *, int *);
 static int decode_signal (char *);
 static void handle_signal (int);
+int suspend_until_signal (sigset_t *, int [], int);
 
 char *signal_names[] = {
     "EXIT",
@@ -92,15 +94,7 @@ char *signal_names[] = {
     "SIGRTMAX-1",
     "SIGRTMAX"
   };
-
-int signal_caught = 0;
-sigset_t signal_mask;
-
-int
-main (int argc, char *argv[])
-{
-  sigset_t previous_signal_mask;
-  int ign_signal[] = {
+int ignore_signals[] = {
     SIGHUP,
     SIGINT,
     SIGQUIT,
@@ -111,24 +105,30 @@ main (int argc, char *argv[])
     SIGCHLD,
     SIGTSTP
   };
-  char *pgm = strchr (argv[0], '/') ? strrchr (argv[0], '/') + 1 : argv[0];
-  int ign_signals = sizeof ign_signal / sizeof ign_signal[0];
+int signal_caught = 0;
+sigset_t signal_mask;
+char *pgm = NULL;
+
+int
+main (int argc, char *argv[])
+{
+  pgm = strchr (argv[0], '/') ? strrchr (argv[0], '/') + 1 : argv[0];
+  int ignore_signals_size = sizeof ignore_signals / sizeof ignore_signals[0];
   int signo = SIGUSR1;
 
+  /* Populate signal_mask. */
   if (sigemptyset (&signal_mask) < 0)
     {
       fprintf (stderr, "%s\n", strerror (errno));
-      exit (1);
+      return 1;
     }
-
-  /* Populate signal_mask. */
-  if (argc == 1)
+  else if (argc < 2)
     {
       if (signal (signo, (sighandler_t) handle_signal) == SIG_ERR
           || sigaddset (&signal_mask, signo) < 0)
         {
           fprintf (stderr, "%s\n", strerror (errno));
-          exit (1);
+          return 1;
         }
     }
   else
@@ -136,58 +136,73 @@ main (int argc, char *argv[])
       if ((signo = decode_signal(argv[i])) == -1)
         {
           fprintf (stderr, "Usage: %s [sigspec] \n", pgm);
-          exit (1);
+          return 1;
         }
       else if (signal (signo, (sighandler_t) handle_signal) == SIG_ERR
                || sigaddset (&signal_mask, signo) < 0)
         {
           fprintf (stderr, "%s\n", strerror (errno));
-          exit (1);
+          return 1;
         }
 
+  exit (suspend_until_signal (&signal_mask,
+                              ignore_signals,
+                              ignore_signals_size));
+}
+
+int
+suspend_until_signal (sigset_t *signal_mask_p,
+                      int ignore_signals[],
+                      int ignore_signals_size)
+{
+  sigset_t previous_signal_mask;
+
   /* Block signals in signal_mask. */
-  if (sigprocmask (SIG_BLOCK, &signal_mask, &previous_signal_mask) < 0)
+  if (sigprocmask (SIG_BLOCK, signal_mask_p, &previous_signal_mask) < 0)
     {
       fprintf (stderr, "%s\n", strerror (errno));
-      exit (1);
+      return 1;
     }
 
-  /* Ignore other signals. */
-  for (int i = 0; i < ign_signals; ++i)
-    if (!sigismember (&signal_mask, ign_signal[i]))
-      signal(ign_signal[i], SIG_IGN);
+  signal_caught = 0;
 
+  /* Ignore other signals. */
+  for (int i = 0; i < ignore_signals_size; ++i)
+    if (!sigismember (signal_mask_p, ignore_signals[i]))
+      signal(ignore_signals[i], SIG_IGN);
+
+  /* Unblock signal_mask until signal handler called. */
   while (!signal_caught)
     if (sigsuspend (&previous_signal_mask) == -1 && errno != EINTR)
       {
         fprintf (stderr, "%s\n", strerror (errno));
-        exit (1);
+        return 1;
       }
 
   /* Restore other signals. */
-  for (int i = 0; i < ign_signals; ++i)
-    if (!sigismember (&signal_mask, ign_signal[i]))
-      signal(ign_signal[i], SIG_DFL);
+  for (int i = 0; i < ignore_signals_size; ++i)
+    if (!sigismember (signal_mask_p, ignore_signals[i]))
+      signal(ignore_signals[i], SIG_DFL);
 
   signal_caught = 0;
 
-  /* Unblock signo */
-  if (sigprocmask (SIG_UNBLOCK, &signal_mask, NULL) < 0)
+  /* Unblock signal_mask. */
+  if (sigprocmask (SIG_UNBLOCK, signal_mask_p, NULL) < 0)
     {
       fprintf (stderr, "%s\n", strerror (errno));
-      exit (1);
+      return 1;
     }
 
-  exit (0);
+  return 0;
 }
 
 /*
  * decode_signal: Derived from bash function of the same name (see:
  *     https://git.savannah.gnu.org/cgit/bash.git/tree/trap.c#n231)
  *
- * Given STRING, return the indicated integer signal number. If STRING is
- * "2", "SIGINT", or "INT", then 2 is returned. Return -1 if STRING
- * doesn't contain a valid signal descriptor.
+ * Given STRING, return corresponding integer signal number, e.g., if
+ * STRING is "2", "SIGINT", or "INT", then 2 is returned. Return -1 if
+ * STRING doesn't contain a valid signal descriptor.
  */
 static int
 decode_signal (char *string)
@@ -196,35 +211,39 @@ decode_signal (char *string)
   char *name;
   char *short_name;
 
-  /* Try converting string to signo using strtol. */
-  if (valid_int (string, &signo))
+  /* Try converting string to signo using (int) strtol. */
+  if (validate_int (string, &signo))
     return (0 < signo && signo < NSIG) ? signo : -1;
 
 #if defined (SIGRTMIN) && defined (SIGRTMAX)
   if (strncasecmp (string, "SIGRTMIN+", 9) == 0)
     {
-      if (valid_int (string+9, &signo) && signo >= 0 && signo <= SIGRTMAX - SIGRTMIN)
+      if (validate_int (string+9, &signo)
+          && signo >= 0 && signo <= SIGRTMAX - SIGRTMIN)
         return (SIGRTMIN + signo);
       else
         return -1;
     }
   else if (strncasecmp (string, "RTMIN+", 6) == 0)
     {
-      if (valid_int (string+6, &signo) && signo >= 0 && signo <= SIGRTMAX - SIGRTMIN)
+      if (validate_int (string+6, &signo) && signo >= 0
+          && signo <= SIGRTMAX - SIGRTMIN)
         return (SIGRTMIN + signo);
       else
         return -1;
     }
   else if (strncasecmp (string, "SIGRTMAX-", 9) == 0)
     {
-      if (valid_int (string+9, &signo) && signo >= 0 && signo <= SIGRTMAX - SIGRTMIN)
+      if (validate_int (string+9, &signo) && signo >= 0
+          && signo <= SIGRTMAX - SIGRTMIN)
         return (SIGRTMAX -  signo);
       else
         return -1;
     }
   else if (strncasecmp (string, "RTMAX-", 6) == 0)
     {
-      if (valid_int (string+6, &signo) && signo >= 0 && signo <= SIGRTMAX - SIGRTMIN)
+      if (validate_int (string+6, &signo) && signo >= 0
+          && signo <= SIGRTMAX - SIGRTMIN)
         return (SIGRTMAX -  signo);
       else
         return -1;
@@ -248,7 +267,7 @@ decode_signal (char *string)
 }
 
 static bool
-valid_int (char *s, int *ip)
+validate_int (char *s, int *ip)
 {
   char *endp = NULL;
   long l = strtol(s, &endp, 10);
