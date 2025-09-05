@@ -1,0 +1,172 @@
+#!/usr/bin/env bash
+#
+# @(#) restart
+#
+# Call shutdown after stopping the inhibit-suspend service.
+#
+: ${CAT_CMD:='@CAT_CMD@'}
+: ${GETOPT_CMD:='@GETOPT_CMD@'}
+: ${READLINK_CMD:='@READLINK_CMD@'}
+: ${REALPATH_CMD:='@REALPATH_CMD@'}
+: ${SUDO_CMD:='@SUDO_CMD@'}
+: ${SYSTEMCTL_CMD:='@SYSTEMCTL_CMD@'}
+: ${SHUTDOWN_CMD:='@SHUTDOWN_CMD@'}
+
+# OS-agnstoic readlink for existent files/directories.
+resolve-existing ()
+{
+    case $($READLINK_CMD --version 2>&1) in
+        *coreutils*)
+            $REALPATH_CMD -e "$@"
+            ;;
+        *)
+            $READLINK_CMD -f "$@"
+            ;;
+    esac
+}
+
+usage ()
+{
+    $CAT_CMD <<EOF
+Usage: $script_name [OPTIONS] [WHEN] [MESSAGE]
+Options:
+  --help         Dispaly this message, then exit.
+  -H, --halt     Halt the system.
+  -P, --poweroff Power off the system.
+  -r, --reboot   Reboot the system (default).
+  --no-wall      Do not send a wall message.
+  --show         Show a pending shutdown action and time if any.
+  -c             Cancel a pending shutdown that is not \`+0' or \`now'.
+  -h             Same as --poweroff, but does not override \`--halt'.
+  -k             Just send a wall message, do not halt, reboot or power off.
+EOF
+}
+
+restart-system ()
+{
+    local -n option_list=$1
+    local when=$2
+    local message=$3
+
+
+    if $SUDO_CMD $SYSTEMCTL_CMD is-active inhibit-suspend.service; then
+        $SUDO_CMD $SYSTEMCTL_CMD stop inhibit-suspend.service
+    fi
+
+    $SUDO_CMD $SHUTDOWN_CMD "${option_list[@]}" ${when:+"$when" ${message:+"$message"}}
+}
+
+parse-args ()
+{
+    local -n option_list=$1
+    local -n timespec=$2
+    local -n wall=$3
+    shift 3
+
+    ## parse input arguments ##
+    local -r short_opts=HPchkr
+    local -r long_opts='halt,help,no-wall,poweroff,reboot,show'
+
+    local args=''
+
+    if ! args=$(
+            $GETOPT_CMD -s bash --options "$short_opts"  \
+                        --longoptions "$long_opts" --name "$script_name" -- "$@"
+         ); then
+        usage
+        exit $?
+    fi
+
+    eval set -- "$args"
+    unset args
+
+    while true; do
+        case "$1" in
+            --help|-h)
+                usage
+                exit 0
+                ;;
+            --halt|-H)
+                option_list+=('-H')
+                ;;
+            --poweroff|-P)
+                option_list+=('-P')
+                ;;
+            --reboot|-r)
+                option_list+=('-r')
+                ;;
+            --no-wall)
+                option_list+=('--no-wall')
+                ;;
+            --show)
+                option_list+=('--show')
+                ;;
+            -c)
+                option_list+=('-c')
+                timespec=''
+                ;;
+            -k)
+                option_list+=('-k')
+                ;;
+            --) # end of options
+                shift
+                break
+                ;;
+            *)
+                echo "Unknown option: $1" >&2
+                usage
+                exit 1
+        esac
+        shift
+    done
+
+    if (( ${#option_list[@]} == 0 )); then
+        option_list+=('-r')
+    fi
+
+    if (( $# > 0 )); then
+        case "$1" in
+            # ++([0-9]))
+            +[0-9]|+[0-9][0-9]|+[0-9][0-9][0-9]|+[0-9][0-9][0-9][0-9])
+                timespec=$1
+                shift
+                ;;
+            [0-9]:[0-5][0-9]|1[0-9]:[0-5][0-9]|2[0-4]:[0-5][0-9])
+                timespec=$1
+                shift
+                ;;
+            now)
+                timespec=$1
+                shift
+                ;;
+            *)
+                echo "Invalid time specification: $timespec" >&2
+                usage
+                exit 1
+                ;;
+        esac
+    fi
+
+    if (( $# > 0 )); then
+        wall=$1
+        shift
+    fi
+}
+
+if test ."$0" = ."${BASH_SOURCE[0]}"; then
+    shopt -s extglob
+
+    declare script=''
+    declare script_name=''
+
+    script=$(resolve-existing "$0") || exit $?
+    script_name=${script##*/}
+
+    declare -a options=()
+    declare when='+1'
+    declare message=''
+
+    parse-args options when message "$@"
+
+    restart-system options ${when:+"$when" ${message:+"$message"}}
+fi
