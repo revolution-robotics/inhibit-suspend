@@ -37,12 +37,12 @@ install: wait-for-signal restart
 	if $(SYSTEMCTL_CMD) is-active inhibit-suspend >/dev/null; then				\
 		$(SYSTEMCTL_CMD) stop inhibit-suspend;						\
 		$(INSTALL_CMD) -m 0755 wait-for-signal $(bindir);				\
-		$(INSTALL_CMD) -m 0644 inhibit-suspend.service $(libdir)/systemd/system;	\
+		$(INSTALL_CMD) -m 0644 $(top_srcdir)/inhibit-suspend.service $(libdir)/systemd/system;	\
 		$(SYSTEMCTL_CMD) daemon-reload;							\
 		$(SYSTEMCTL_CMD) start inhibit-suspend;						\
 	else											\
 		$(INSTALL_CMD) -m 0755 wait-for-signal $(bindir);				\
-		$(INSTALL_CMD) -m 0644 inhibit-suspend.service $(libdir)/systemd/system;	\
+		$(INSTALL_CMD) -m 0644 $(top_srcdir)/inhibit-suspend.service $(libdir)/systemd/system;	\
 		$(SYSTEMCTL_CMD) daemon-reload;							\
 	fi
 	$(INSTALL_CMD) -m 0755 restart $(bindir)
